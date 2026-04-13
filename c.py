@@ -1,91 +1,90 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Instalador automatico do sshx
-Baixa e executa curl -sSf https://sshx.io/get | sh
+SSHX para Render - Instalação manual sem root
 """
 import os
 import sys
+import urllib.request
+import tarfile
+import tempfile
+import shutil
 import subprocess
-import platform
 
 print("=" * 50)
-print("  SSHX - INSTALADOR AUTOMATICO")
+print("  SSHX RENDER - INSTALADOR MANUAL")
 print("=" * 50)
 
-SYSTEM = platform.system()
+HOME = os.path.expanduser("~")
+SSHX_DIR = os.path.join(HOME, "sshx-bin")
+SSHX_BIN = os.path.join(SSHX_DIR, "sshx")
 
 def install_sshx():
-    """Baixa e instala sshx"""
+    """Baixa e extrai sshx manualmente"""
     
-    print("\n[1/2] Instalando sshx...")
+    print("\n[1/3] Baixando sshx...")
     
-    if SYSTEM == "Windows":
-        print("⚠️ sshx nao funciona no Windows")
-        print("Use ngrok: https://ngrok.com")
-        print("Ou WSL: wsl --install")
-        return False
+    # Criar diretório
+    os.makedirs(SSHX_DIR, exist_ok=True)
     
-    # Linux/Mac
-    cmd = "curl -sSf https://sshx.io/get | sh"
-    print(f"Executando: {cmd}")
+    # URL do sshx
+    url = "https://s3.amazonaws.com/sshx/sshx-x86_64-unknown-linux-musl.tar.gz"
+    tar_path = os.path.join(tempfile.gettempdir(), "sshx.tar.gz")
     
-    result = subprocess.run(cmd, shell=True, capture_output=False)
-    
-    if result.returncode == 0:
-        print("\n[1/2] ✅ sshx instalado com sucesso!")
+    try:
+        # Baixar
+        urllib.request.urlretrieve(url, tar_path)
+        print("[1/3] ✅ Download concluído")
+        
+        # Extrair
+        print("[2/3] Extraindo...")
+        with tarfile.open(tar_path, "r:gz") as tar:
+            # Extrair apenas o binário sshx (ignorar arquivos ._*)
+            for member in tar.getmembers():
+                if member.name == "sshx" or member.name.endswith("/sshx"):
+                    member.name = "sshx"  # Renomear para evitar caminhos
+                    tar.extract(member, SSHX_DIR)
+                    break
+        
+        # Tornar executável
+        if os.path.exists(SSHX_BIN):
+            os.chmod(SSHX_BIN, 0o755)
+            print(f"[2/3] ✅ sshx extraído para {SSHX_BIN}")
+        else:
+            print("[2/3] ❌ sshx não encontrado no arquivo")
+            return False
+        
+        # Limpar
+        os.remove(tar_path)
         return True
-    else:
-        print("\n[1/2] ❌ Erro na instalacao")
+        
+    except Exception as e:
+        print(f"[ERRO] {e}")
         return False
 
-def run_sshx(port=3000):
-    """Executa sshx na porta especificada"""
+def run_sshx():
+    """Executa sshx"""
     
-    print(f"\n[2/2] Iniciando sshx na porta {port}...")
+    port = os.environ.get('PORT', '3000')
+    print(f"\n[3/3] Iniciando sshx na porta {port}...")
     
-    # Verificar se sshx esta disponivel
-    sshx_paths = [
-        "sshx",
-        os.path.expanduser("~/.sshx/sshx"),
-        os.path.expanduser("~/.local/bin/sshx"),
-        "/usr/local/bin/sshx"
-    ]
+    if not os.path.exists(SSHX_BIN):
+        print("[3/3] ❌ sshx não encontrado")
+        return False
     
-    sshx_cmd = None
-    for path in sshx_paths:
-        result = subprocess.run(f"which {path} 2>/dev/null || command -v {path} 2>/dev/null", 
-                               shell=True, capture_output=True, text=True)
-        if result.returncode == 0 and result.stdout.strip():
-            sshx_cmd = result.stdout.strip()
-            break
+    print("\n" + "=" * 50)
+    print("  ✅ SSHX INICIADO!")
+    print("=" * 50)
+    print(f"📍 Porta: {port}")
+    print(f"🔗 URL aparecerá abaixo:")
+    print("=" * 50 + "\n")
     
-    if not sshx_cmd:
-        sshx_cmd = "sshx"  # Tentar mesmo assim
-    
-    print(f"Usando: {sshx_cmd}")
-    print(f"\n{'='*50}")
-    print("  SSHX INICIADO!")
-    print(f"{'='*50}")
-    print(f"Comando: {sshx_cmd} {port}")
-    print(f"{'='*50}\n")
-    
-    # Executar sshx
-    subprocess.run(f"{sshx_cmd} {port}", shell=True)
-
-def main():
-    """Funcao principal"""
-    
-    # Porta (pode ser passada como argumento)
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 3000
-    
-    # Instalar sshx
-    if install_sshx():
-        # Rodar sshx
-        run_sshx(port)
-    else:
-        print("\n❌ Falha na instalacao do sshx")
-        sys.exit(1)
+    # Executar
+    os.system(f"{SSHX_BIN} {port}")
 
 if __name__ == "__main__":
-    main()
+    if install_sshx():
+        run_sshx()
+    else:
+        print("\n❌ Falha na instalação")
+        sys.exit(1)
