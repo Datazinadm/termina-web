@@ -1,197 +1,166 @@
 #!/usr/bin/env python3
-import os, sys, platform, subprocess, time, urllib.request, tempfile, shutil
+"""
+Render Deploy - Terminal Web + code-server (VS Code no navegador)
+Instala tudo automaticamente no Render
+"""
+import os
+import sys
+import json
+import subprocess
+import urllib.request
+import shutil
+from flask import Flask, request, jsonify, send_from_directory
 
-SYSTEM = platform.system()
-PROJECT_DIR = os.path.join(os.path.expanduser("~"), "terminal-web")
+app = Flask(__name__)
 
-def run(cmd, silent=False):
-    """Executa comando sem mostrar saida"""
-    try:
-        if SYSTEM == "Windows":
-            subprocess.run(cmd, shell=True, capture_output=silent, 
-                          creationflags=subprocess.CREATE_NO_WINDOW)
-        else:
-            subprocess.run(cmd, shell=True, capture_output=silent)
-        return True
-    except:
-        return False
+# ============================================
+# INSTALAÇÃO AUTOMÁTICA (roda no startup)
+# ============================================
+def install_code_server():
+    """Instala code-server (VS Code no navegador)"""
+    print("[1/3] Instalando code-server...")
+    
+    # Baixar code-server
+    url = "https://github.com/coder/code-server/releases/download/v4.19.0/code-server-4.19.0-linux-amd64.tar.gz"
+    tar_path = "/tmp/code-server.tar.gz"
+    
+    urllib.request.urlretrieve(url, tar_path)
+    subprocess.run(f"tar -xzf {tar_path} -C /tmp", shell=True)
+    
+    # Mover para /opt
+    subprocess.run("mkdir -p /opt/code-server", shell=True)
+    subprocess.run("cp -r /tmp/code-server-*/* /opt/code-server/", shell=True)
+    
+    # Criar diretório de configuração
+    subprocess.run("mkdir -p ~/.config/code-server", shell=True)
+    
+    # Configuração básica (sem senha)
+    config = """
+bind-addr: 0.0.0.0:8080
+auth: none
+cert: false
+"""
+    with open(os.path.expanduser("~/.config/code-server/config.yaml"), "w") as f:
+        f.write(config)
+    
+    print("[1/3] ✅ code-server instalado!")
 
-def check_node():
-    """Verifica/instala Node.js automaticamente"""
-    if run("node --version", silent=True):
-        return True
-    
-    print("[1/5] Instalando Node.js...")
-    
-    if SYSTEM == "Windows":
-        url = "https://nodejs.org/dist/v20.11.0/node-v20.11.0-x64.msi"
-        msi = os.path.join(tempfile.gettempdir(), "node.msi")
-        urllib.request.urlretrieve(url, msi)
-        run(f'msiexec /i "{msi}" /quiet /norestart')
-        time.sleep(30)
-        os.remove(msi)
-    
-    elif SYSTEM == "Linux":
-        if os.path.exists("/etc/debian_version"):
-            run("sudo apt update -y && sudo apt install -y curl")
-            run("curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -")
-            run("sudo apt install -y nodejs")
-        else:
-            run("curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -")
-            run("sudo yum install -y nodejs")
-    
-    elif SYSTEM == "Darwin":
-        run("brew install node")
-    
-    return True
-
-def create_files():
-    """Cria arquivos do projeto"""
-    print("[2/5] Criando arquivos...")
-    
-    os.makedirs(PROJECT_DIR, exist_ok=True)
-    os.chdir(PROJECT_DIR)
-    
-    # package.json
-    with open("package.json", "w") as f:
-        f.write('{"name":"terminal-web","dependencies":{"express":"^4.18.2"}}')
-    
-    # server.js
-    with open("server.js", "w", encoding="utf-8") as f:
-        f.write("""
-const express = require('express');
-const { exec } = require('child_process');
-const os = require('os');
-const app = express();
-app.use(express.json());
-app.use(express.static(__dirname));
-
-app.post('/execute', (req, res) => {
-    const cmd = req.body.command || '';
-    if (!cmd.trim()) return res.json({output: ''});
-    
-    const shell = os.platform() === 'win32' ? 'cmd.exe' : '/bin/bash';
-    exec(cmd, {shell, timeout: 30000, maxBuffer: 50*1024*1024}, (err, out, serr) => {
-        res.json({output: out + (serr || (err ? err.message : ''))});
-    });
-});
-
-app.listen(3000, () => console.log('Servidor: http://localhost:3000'));
-""")
+def create_terminal_files():
+    """Cria arquivos do terminal web"""
+    print("[2/3] Criando arquivos do terminal...")
     
     # index.html
-    with open("index.html", "w", encoding="utf-8") as f:
-        f.write("""
-<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>Terminal Web</title>
-<style>
-body{background:#000;color:#0f0;font-family:monospace;padding:10px;margin:0}
-input{background:#000;color:#fff;border:none;outline:none;font:14px monospace;width:80%}
-#out{margin-bottom:10px}p{margin:2px 0;white-space:pre-wrap}
-.g{color:#0f0}.w{color:#fff}.b{color:#08f}.y{color:#ff0}.r{color:#f44}
-</style></head>
-<body><div id="out"></div>
+    with open("index.html", "w") as f:
+        f.write("""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Terminal Web</title>
+    <style>
+        body{background:#000;color:#0f0;font-family:monospace;padding:10px}
+        input{background:#000;color:#fff;border:none;outline:none;font:14px monospace;width:80%}
+        #out{margin-bottom:10px}p{margin:2px 0;white-space:pre-wrap}
+        .g{color:#0f0}.w{color:#fff}.b{color:#08f}.y{color:#ff0}
+        .menu{position:fixed;top:10px;right:10px}
+        .menu a{color:#0ff;margin:0 10px;text-decoration:none}
+    </style>
+</head>
+<body>
+<div class="menu">
+    <a href="/">Terminal</a>
+    <a href="/vscode" target="_blank">VS Code</a>
+</div>
+<div id="out"></div>
 <script>
 let hist=[],c=0;
-function addLine(t,css){let p=document.createElement("p");p.textContent=t;p.className=css;out.appendChild(p)}
-function prompt(){let d=document.createElement("div");d.id="sp";
-d.innerHTML='<span class="g">user@term</span><span class="w">:</span><span class="b">~</span><span class="w">$</span> ';
-let i=document.createElement("input");i.id="in";i.spellcheck=false;d.appendChild(i);document.body.appendChild(d);i.focus()}
+function addLine(t,c){let p=document.createElement("p");p.textContent=t;p.className=c;out.appendChild(p)}
+function prompt(){
+let d=document.createElement("div");d.id="sp";
+d.innerHTML='<span class="g">user@render</span><span class="w">:</span><span class="b">~</span><span class="w">$</span> ';
+let i=document.createElement("input");i.id="in";i.spellcheck=false;
+d.appendChild(i);document.body.appendChild(d);i.focus()
+}
 async function exec(cmd){
-try{let r=await fetch('/execute',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:cmd})});
-let d=await r.json();return d.output}catch(e){return 'Erro: servidor offline'}}
+try{
+let r=await fetch('/execute',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:cmd})});
+let d=await r.json();return d.output
+}catch(e){return 'Erro'}
+}
 async function send(){
 let v=document.getElementById('in').value;
-addLine('user@term:~$ '+v,'w');
+addLine('user@render:~$ '+v,'w');
 if(v.trim())hist.push(v);
 document.getElementById('in').value='';c=hist.length;
 if(v=='clear'){out.innerHTML=''}else if(v){addLine(await exec(v),'w')}
-document.getElementById('sp').scrollIntoView()}
+document.getElementById('sp').scrollIntoView()
+}
 document.addEventListener('keydown',e=>{
 if(e.key=='Enter')send();
 if(e.key=='ArrowUp'){e.preventDefault();if(c>0)c--;document.getElementById('in').value=hist[c]||''}
 if(e.key=='ArrowDown'){e.preventDefault();if(c<hist.length-1)c++;else{document.getElementById('in').value='';c=hist.length}}
 });
-addLine('Terminal Web - Digite comandos do sistema','y');
-addLine('clear = limpa | comandos Windows/Linux/Mac','y');
+addLine('Terminal Web Render - Comandos Linux','y');
+addLine('clear = limpa | <a href="/vscode" target="_blank">Abrir VS Code</a>','y');
 prompt();
-</script></body></html>
-""")
+</script>
+</body></html>""")
+    
+    print("[2/3] ✅ Arquivos criados!")
 
-def install_deps():
-    """Instala dependencias npm"""
-    print("[3/5] Instalando dependencias...")
-    os.chdir(PROJECT_DIR)
-    run("npm install --silent", silent=True)
+def start_code_server():
+    """Inicia code-server em background"""
+    print("[3/3] Iniciando code-server na porta 8080...")
+    subprocess.Popen([
+        "/opt/code-server/bin/code-server",
+        "--bind-addr", "0.0.0.0:8080",
+        "--auth", "none",
+        "/workspace"
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    print("[3/3] ✅ code-server rodando!")
 
-def install_tunnel():
-    """Instala ferramenta de tunel (ngrok no Windows, sshx no Linux/Mac)"""
-    print("[4/5] Instalando tunel...")
-    
-    if SYSTEM == "Windows":
-        # Ngrok para Windows
-        ngrok_path = os.path.join(os.environ.get("USERPROFILE", ""), "ngrok.exe")
-        if not os.path.exists(ngrok_path):
-            url = "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip"
-            zip_path = os.path.join(tempfile.gettempdir(), "ngrok.zip")
-            urllib.request.urlretrieve(url, zip_path)
-            import zipfile
-            with zipfile.ZipFile(zip_path, 'r') as z:
-                z.extract("ngrok.exe", os.path.dirname(ngrok_path))
-            os.remove(zip_path)
-    else:
-        # Sshx para Linux/Mac
-        run("curl -sSf https://sshx.io/get | sh -s -- -y 2>/dev/null", silent=True)
+# ============================================
+# ROTAS DO FLASK
+# ============================================
+@app.route('/')
+def index():
+    return send_from_directory('.', 'index.html')
 
-def start_server():
-    """Inicia o servidor e tunel"""
-    print("[5/5] Iniciando servidor...")
-    os.chdir(PROJECT_DIR)
-    
-    if SYSTEM == "Windows":
-        # Windows: abre node em nova janela e ngrok em outra
-        subprocess.Popen("start cmd /k node server.js", shell=True)
-        time.sleep(3)
-        ngrok = os.path.join(os.environ.get("USERPROFILE", ""), "ngrok.exe")
-        if os.path.exists(ngrok):
-            subprocess.Popen(f"start cmd /k {ngrok} http 3000", shell=True)
-            print("\n✅ SERVIDOR INICIADO!")
-            print("📁 Local: http://localhost:3000")
-            print("🌍 Publico: Verifique a janela do ngrok")
-    else:
-        # Linux/Mac: abre em terminal separado
-        if SYSTEM == "Linux":
-            subprocess.Popen(["x-terminal-emulator", "-e", "node server.js"])
-            time.sleep(3)
-            subprocess.Popen(["x-terminal-emulator", "-e", "sshx 3000"])
-        elif SYSTEM == "Darwin":
-            subprocess.Popen(["osascript", "-e", 'tell app "Terminal" to do script "node ' + 
-                             os.path.join(PROJECT_DIR, "server.js") + '"'])
-            time.sleep(3)
-            subprocess.Popen(["osascript", "-e", 'tell app "Terminal" to do script "sshx 3000"'])
-        
-        print("\n✅ SERVIDOR INICIADO!")
-        print("📁 Local: http://localhost:3000")
-        print("🌍 Publico: Verifique a janela do sshx")
-    
-    print("\nPressione Ctrl+C para encerrar tudo")
-    
+@app.route('/execute', methods=['POST'])
+def execute():
     try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("\nEncerrando...")
-        if SYSTEM == "Windows":
-            run("taskkill /f /im node.exe")
-            run("taskkill /f /im ngrok.exe")
+        data = request.get_json()
+        cmd = data.get('command', '').strip()
+        if not cmd:
+            return jsonify({'output': ''})
+        
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+        output = result.stdout + result.stderr
+        return jsonify({'output': output})
+    except Exception as e:
+        return jsonify({'output': str(e)})
 
-if __name__ == "__main__":
+@app.route('/status')
+def status():
+    return jsonify({'status': 'online', 'vscode': 'http://localhost:8080'})
+
+# ============================================
+# INICIALIZAÇÃO
+# ============================================
+if __name__ == '__main__':
     print("=" * 50)
-    print("  TERMINAL WEB - Instalador Automatico")
+    print("  RENDER DEPLOY - Terminal + VS Code")
     print("=" * 50)
     
-    check_node()
-    create_files()
-    install_deps()
-    install_tunnel()
-    start_server()
+    # Instalar tudo
+    install_code_server()
+    create_terminal_files()
+    start_code_server()
+    
+    print("\n✅ TUDO PRONTO!")
+    print("📁 Terminal: http://0.0.0.0:10000")
+    print("💻 VS Code: http://0.0.0.0:8080")
+    print("=" * 50)
+    
+    # Iniciar servidor Flask
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
